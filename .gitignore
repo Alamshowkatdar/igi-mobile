@@ -1,0 +1,25 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Signing material - never publish these
+keystore.properties
+keystore/
+*.jks
+*.keystore
+
+# Generated game content. GitHub rejects files over 100 MB, and this content is
+# copyrighted anyway: the built APK is attached to a release instead.
+/app/src/main/assets/bundle/
+/tools/.bundle-cache/
+
+# Release artifacts are uploaded to GitHub Releases, not committed (100 MB limit)
+/*.apk
