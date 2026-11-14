@@ -14,7 +14,7 @@ so it installs, launches and plays **with no connection and no download step**.
 ## Download
 
 The signed APK is attached to the [latest release](https://github.com/Alamshowkatdar/igi-mobile/releases/latest)
-(`IGI-Mobile-1.0.0-bundled.apk`, ~117 MB). Sideload it on Android 8.0+ and let
+(`IGI-Mobile-1.0.1-bundled.apk`, ~117 MB). Sideload it on Android 8.0+ and let
 the app expand the bundled data on first launch. The source tree does **not**
 contain the game data; GitHub's 100 MB file limit is why it is a release asset.
 Build it yourself with `./gradlew :app:fetchGameBundle` when you have permission
