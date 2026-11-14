@@ -1,6 +1,9 @@
 package com.igi.mobile
 
 import android.Manifest
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -42,7 +45,13 @@ import com.igi.mobile.data.GamePaths
 import com.igi.mobile.data.GameRepository
 import com.igi.mobile.data.Net
 import com.igi.mobile.web.GameWebViewClient
+import com.igi.mobile.web.LanBridge
+import com.igi.mobile.web.LanWebRtc
+import org.json.JSONObject
 import java.io.File
+import java.net.ConnectException
+import java.net.InetSocketAddress
+import java.net.Socket
 
 class GameActivity : ComponentActivity() {
 
@@ -56,6 +65,9 @@ class GameActivity : ComponentActivity() {
     private var mainFrameFailed = false
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
+
+    /** Rate-limits the local co-op diagnostic so a retry loop cannot stack dialogs. */
+    private var lastLanReportAt = 0L
 
     /**
      * The co-op pairing screen scans the host's QR code with getUserMedia(). WebView routes that
@@ -213,6 +225,8 @@ class GameActivity : ComponentActivity() {
             webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        // Used by assets/lan-webrtc.js: supplies the phone's LAN address and receives stalls.
+        webView.addJavascriptInterface(LanBridge(this), LanBridge.NAME)
 
         val repository = GameRepository.get(this)
         webView.webViewClient = object : WebViewClient() {
@@ -244,6 +258,8 @@ class GameActivity : ComponentActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
                 if (!mainFrameFailed) overlay.visibility = View.GONE
+                // Local co-op needs WebRTC inside a WebView; see assets/lan-webrtc.js.
+                LanWebRtc.install(view)
                 // Pairing QR scanning depends on these two browser capabilities.
                 view.evaluateJavascript(
                     "(function(){try{return (typeof window.BarcodeDetector)+'|'+" +
@@ -278,7 +294,10 @@ class GameActivity : ComponentActivity() {
         }
 
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean = true
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                Log.i(LanBridge.TAG, "${consoleMessage.messageLevel()} ${consoleMessage.message()}")
+                return true
+            }
 
             override fun onPermissionRequest(request: PermissionRequest) {
                 val trusted = request.origin.host.equals("playigi.com", ignoreCase = true)
@@ -323,6 +342,105 @@ class GameActivity : ComponentActivity() {
         progressBar.visibility = View.GONE
         retryButton.visibility = View.VISIBLE
         statusText.text = message
+    }
+
+    /**
+     * Called by assets/lan-webrtc.js when "Local network (no internet)" pairing swapped codes but
+     * ICE never connected. Without this the pairing panel sits on "Connecting..." forever, so the
+     * point here is to say what the network is doing and whether the router is at fault.
+     */
+    fun showLanStallReport(raw: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLanReportAt < 60_000L) return
+        lastLanReportAt = now
+
+        val report = runCatching { JSONObject(raw) }.getOrNull() ?: return
+        val local = report.optString("localIp").ifBlank { "unknown" }
+        val rewritten = report.optInt("mdnsRewritten", 0)
+        val remoteHadMdns = report.optBoolean("remoteHadMdns", false)
+
+        val remoteLabels = mutableListOf<String>()
+        val remoteHosts = mutableListOf<String>()
+        report.optJSONArray("remoteCandidates")?.let { candidates ->
+            for (index in 0 until candidates.length()) {
+                val candidate = candidates.optJSONObject(index) ?: continue
+                val address = candidate.optString("address")
+                if (address.isBlank()) continue
+                val port = candidate.optInt("port", 0)
+                remoteLabels += if (port > 0) "$address:$port" else address
+                if (IPV4.matches(address) && address !in remoteHosts) remoteHosts += address
+            }
+        }
+        val state = "signaling ${report.optString("signalingState")}, " +
+            "ICE ${report.optString("iceConnectionState")}"
+
+        // Probing blocks, so keep it off the UI thread. A refused connection still proves the
+        // packet crossed the network; only a timeout means the access point dropped it.
+        Thread({
+            val reachable = remoteHosts.take(4).map { host -> host to probeLanHost(host) }
+            val blocking = reachable.any { !it.second }
+            val text = buildString {
+                appendLine("Both phones exchanged pairing codes, but the direct Wi-Fi link never opened.")
+                appendLine()
+                appendLine("This phone: $local")
+                appendLine(
+                    "Other phone: " + if (remoteLabels.isEmpty()) "no usable address in the code"
+                    else remoteLabels.joinToString(", ")
+                )
+                if (reachable.isNotEmpty()) {
+                    appendLine(
+                        "Reachable: " + reachable.joinToString(", ") { (host, ok) ->
+                            "$host ${if (ok) "yes" else "no"}"
+                        }
+                    )
+                }
+                appendLine("mDNS candidates rewritten: $rewritten")
+                appendLine("State: $state")
+                appendLine()
+                append(
+                    when {
+                        blocking ->
+                            "The Wi-Fi router is blocking traffic between its own clients " +
+                                "(AP/client isolation). Turn that off, or start a hotspot on one " +
+                                "phone and connect the other phone to it."
+                        remoteHadMdns && remoteHosts.isEmpty() ->
+                            "The other phone only advertised mDNS (.local) addresses, which " +
+                                "Android cannot resolve. Update both phones to this build and pair again."
+                        remoteLabels.isEmpty() ->
+                            "The pairing code carried no usable address. Pair again and keep both " +
+                                "phones on the same Wi-Fi."
+                        else ->
+                            "The phones can reach each other, so pairing itself failed rather than " +
+                                "the network. Close Co-op and pair again."
+                    }
+                )
+            }
+            Log.i(LanBridge.TAG, "Local co-op stall report:\n$text\nraw=$raw")
+            runOnUiThread { showLanReportDialog(text, raw) }
+        }, "igi-lan-probe").start()
+    }
+
+    private fun showLanReportDialog(text: String, raw: String) {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle("Local co-op problem")
+            .setMessage(text)
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Copy details") { _, _ ->
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(ClipData.newPlainText("IGI local co-op", "$text\n\n$raw"))
+                Toast.makeText(this, "Copied.", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun probeLanHost(host: String): Boolean = try {
+        Socket().use { it.connect(InetSocketAddress(host, 9), 900) }
+        true
+    } catch (refused: ConnectException) {
+        true
+    } catch (e: Exception) {
+        false
     }
 
     private fun sendEscapeToGame() {
@@ -398,5 +516,9 @@ class GameActivity : ComponentActivity() {
             webView.destroy()
         }
         super.onDestroy()
+    }
+
+    private companion object {
+        val IPV4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
     }
 }
