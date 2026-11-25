@@ -14,9 +14,11 @@ so it installs, launches and plays **with no connection and no download step**.
 ## Download
 
 The signed APK is attached to the [latest release](https://github.com/Alamshowkatdar/igi-mobile/releases/latest)
-(`IGI-Mobile-1.0.1-bundled.apk`, ~117 MB). Sideload it on Android 8.0+ and let
-the app expand the bundled data on first launch. The source tree does **not**
-contain the game data; GitHub's 100 MB file limit is why it is a release asset.
+(`IGI-Mobile-1.0.2-bundled.apk`). It contains the complete web shell and all
+mission data — including HD textures and FLAC audio — so nothing is downloaded
+at install time. Sideload it on Android 8.0+ and let the app expand the bundled
+data on first launch. The source tree does **not** contain the game data;
+GitHub's 100 MB file limit is why it is a release asset.
 Build it yourself with `./gradlew :app:fetchGameBundle` when you have permission
 to use the content.
 
@@ -28,8 +30,8 @@ to use the content.
 |---|---|
 | ✅ Native launcher, mission browser, mobile-friendly shell | ❌ Not a from-scratch native 3D rewrite of the game |
 | ✅ Fully offline: shell + data extracted from the APK on first run | ❌ Not an official release of the game |
-| ✅ Optional HD textures / FLAC audio can be added by download | ❌ Not licensed for distribution |
-| ✅ 6.5 MB of app code; the APK's size is the bundled game content | |
+| ✅ HD textures and FLAC audio bundled, no extra download | ❌ Not licensed for distribution |
+| ✅ Small app code; the APK's size is the bundled game content | |
 
 ---
 
@@ -38,9 +40,9 @@ to use the content.
 **On the phone**
 
 - Android 8.0 (API 26) or newer with OpenGL ES 2.0
-- ~250 MB free storage (the APK plus its expanded copy)
-- No internet needed to play. Wi-Fi is only used if you enable the optional HD
-  texture pack or FLAC soundtrack, or ask the app to re-check for updates.
+- ~800 MB free storage (the APK plus its expanded copy of the full bundle)
+- No internet needed to play. Every mission, HD texture and FLAC track is in the
+  APK; Wi-Fi is only used if you ask the app to re-check for updates.
 
 **On the build machine**
 
@@ -79,7 +81,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 The bundle is generated, not hand-edited:
 
 ```bash
-./gradlew :app:fetchGameBundle          # shell + all 14 missions, SD + touch
+./gradlew :app:fetchGameBundle          # shell + all missions, HD + FLAC (full bundle)
 java tools/FetchBundle.java app/src/main/assets/bundle --hd --flac
 ```
 
@@ -87,7 +89,7 @@ java tools/FetchBundle.java app/src/main/assets/bundle --hd --flac
 `offline-index.json`, downloads the files into `tools/.bundle-cache/`, and writes:
 
 - `app/src/main/assets/bundle/shell.zip` — page, JS/WASM, fonts, radio audio
-- `app/src/main/assets/bundle/data.zip` — mission data (store-only, ~105 MB)
+- `app/src/main/assets/bundle/data.zip` — all mission data with HD textures and FLAC audio (store-only)
 - `app/src/main/assets/bundle/version.txt` — content hash and entry counts
 - `app/src/main/assets/offline-index.json` — manifest matching the bundle
 
@@ -158,6 +160,14 @@ MainActivity (Compose)                GameActivity (fullscreen WebView)
   `navigator.serviceWorker.register` and unregisters existing registrations.
   `BundleInstaller` runs the same patch after expanding the shell, since the
   bundled `index.html` comes straight from the site.
+- **Gyro aim** — the web build first looks for the Generic Sensor API
+  (`Gyroscope` + `GravitySensor`) and only falls back to `deviceorientation` when they are
+  missing. Android WebView does not provide them, so that fallback derives pitch from
+  `asin(z)` of the gravity vector, which is nearly flat in a landscape grip and cannot look
+  up or down. The app injects `__IGI_GYRO_FIX__` at document start: small stand-ins for both
+  constructors backed by the phone's native `TYPE_GYROSCOPE` and `TYPE_GRAVITY` sensors
+  (`GyroBridge.kt`). The game then uses its own gravity-compensated handler for both axes;
+  its gyro mode, sensitivity and up/down inversion all still apply.
 - **Co-op QR pairing** — the web build scans the host's QR code with
   `getUserMedia` + `BarcodeDetector`. WebView routes that through
   `WebChromeClient.onPermissionRequest`; `GameActivity` asks for the Android
@@ -294,6 +304,12 @@ phone answered on the LAN. Read that first:
 
 `adb logcat -s IgiGame` prints the whole pairing trace: `[igi-lan]` lines cover the
 ICE candidates, mDNS rewrites, signaling/connection state and the remote SDP.
+
+**Gyro aims sideways but not up/down**
+The app injects its sensor bridge into the cached `index.html`, so open the game through **PLAY**
+in this app (not a browser shortcut) and let it update the shell once. If up/down feels reversed,
+flip the game's *Invert up/down* gyro setting. Make sure the game's control mode is actually set to
+a gyro option, not touch.
 
 **Audio keeps playing after leaving**
 The activity abandons audio focus in `onPause`. If a vendor ROM ignores it, swipe

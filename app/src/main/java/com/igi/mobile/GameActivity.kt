@@ -45,6 +45,7 @@ import com.igi.mobile.data.GamePaths
 import com.igi.mobile.data.GameRepository
 import com.igi.mobile.data.Net
 import com.igi.mobile.web.GameWebViewClient
+import com.igi.mobile.web.GyroBridge
 import com.igi.mobile.web.LanBridge
 import com.igi.mobile.web.LanWebRtc
 import org.json.JSONObject
@@ -65,6 +66,7 @@ class GameActivity : ComponentActivity() {
     private var mainFrameFailed = false
     private var audioManager: AudioManager? = null
     private var focusRequest: AudioFocusRequest? = null
+    private lateinit var gyroBridge: GyroBridge
 
     /** Rate-limits the local co-op diagnostic so a retry loop cannot stack dialogs. */
     private var lastLanReportAt = 0L
@@ -227,6 +229,9 @@ class GameActivity : ComponentActivity() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         // Used by assets/lan-webrtc.js: supplies the phone's LAN address and receives stalls.
         webView.addJavascriptInterface(LanBridge(this), LanBridge.NAME)
+        // The injected Gyroscope/GravitySensor stand-ins read native sensor data from here.
+        gyroBridge = GyroBridge(this)
+        webView.addJavascriptInterface(gyroBridge, GyroBridge.NAME)
 
         val repository = GameRepository.get(this)
         webView.webViewClient = object : WebViewClient() {
@@ -492,10 +497,12 @@ class GameActivity : ComponentActivity() {
         hideSystemBars()
         webView.onResume()
         webView.resumeTimers()
+        gyroBridge.start()
         requestAudioFocus()
     }
 
     override fun onPause() {
+        gyroBridge.stop()
         webView.onPause()
         webView.pauseTimers()
         abandonAudioFocus()

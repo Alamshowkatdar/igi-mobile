@@ -20,8 +20,8 @@ android {
         applicationId = "com.igi.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -98,7 +98,9 @@ tasks.register<Exec>("fetchGameBundle") {
     commandLine(
         File(File(System.getProperty("java.home"), "bin"), "java").absolutePath,
         "tools/FetchBundle.java",
-        "app/src/main/assets/bundle"
+        "app/src/main/assets/bundle",
+        "--hd",
+        "--flac"
     )
 }
 

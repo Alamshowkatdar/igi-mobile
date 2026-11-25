@@ -243,6 +243,9 @@ class GameRepository private constructor(context: Context) {
             }
         }
         if (isShellReady()) {
+            // Patch even an already-cached shell: older builds injected a deviceorientation-only
+            // shim that must be replaced by the native sensor bridge.
+            runCatching { ShellCache.patchIndex(File(GamePaths.shellDir(app), "index.html")) }
             _state.update { it.copy(shellReady = true) }
             return@withContext true
         }

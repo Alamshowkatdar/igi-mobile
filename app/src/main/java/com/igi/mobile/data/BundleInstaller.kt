@@ -81,7 +81,7 @@ object BundleInstaller {
     fun prepare(context: Context, onProgress: (Float) -> Unit = {}): Boolean {
         val info = info(context) ?: return false
         if (isInstalled(context)) {
-            // Older installs may predate the boot-script patch; make sure it is present.
+            // Older installs may predate the boot/gyro script patches; make sure both are present.
             runCatching { ShellCache.patchIndex(File(GamePaths.shellDir(context), "index.html")) }
             onProgress(1f)
             return true
